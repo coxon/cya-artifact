@@ -103,29 +103,53 @@ async function closeDrawer(page, method = "button") {
   if (method === "escape") await page.keyboard.press("Escape");
   else await page.locator("#pclose").click();
   await page.locator("#panel").waitFor({ state: "hidden" });
+  const frame = await page.locator("#frame").boundingBox();
+  check(Math.abs(frame.x + frame.width - page.viewportSize().width) <= 1, `${page.viewportSize().width}px: closing restores full iframe width`);
+  check(await page.locator("#panel").evaluate(el => el.inert && el.getAttribute("aria-hidden") === "true"), `${page.viewportSize().width}px: closed drawer is inert and hidden from accessibility tree`);
 }
 async function assertHighlight(frame, cdp, target, label) {
   await until(async () => {
     const s = await overlayState(cdp);
-    const r = await frame.locator(target).evaluate(el => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: innerHeight, scrollY }; });
+    const r = await frame.locator(target).evaluate(el => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: innerWidth, height: innerHeight, scrollY }; });
     const page = frame.page();
     let visibleHeight = r.height;
     if (page.viewportSize().width <= 640 && await page.locator("#panel.show").count()) {
       const drawer = await page.locator("#panel").boundingBox(), iframe = await page.locator("#frame").boundingBox();
       visibleHeight = Math.min(visibleHeight, drawer.y - iframe.y);
     }
-    return s && s.display !== "none" && +s.opacity > 0 && r.top >= 0 && r.bottom <= visibleHeight && Math.abs(parseFloat(s.top) - (r.top + r.scrollY - 3)) < 2;
+    return s && s.display !== "none" && +s.opacity > 0 && r.top >= 0 && r.bottom <= visibleHeight && r.left >= 0 && r.right <= r.width && Math.abs(parseFloat(s.top) - (r.top + r.scrollY - 3)) < 2;
   }, label);
   check(true, label);
 }
 async function assertDrawerLayout(page, width, label) {
   await assertFits(page, "#panel", label + ": drawer fits viewport");
-  const rect = await page.locator("#panel").boundingBox(), { height } = page.viewportSize();
-  if (width > 640) check(rect.width >= 360 && rect.width <= 420 && Math.abs(rect.x + rect.width - width) <= 1 && Math.abs(rect.y - 44) <= 1 && Math.abs(rect.y + rect.height - height) <= 1, label + ": full-height right drawer sits below top bar");
+  const rect = await page.locator("#panel").boundingBox(), frame = await page.locator("#frame").boundingBox(), { height } = page.viewportSize();
+  check(!intersects(rect, frame), label + ": drawer never intersects the iframe");
+  check(await page.locator('.modal, [id*="backdrop"], [class*="backdrop"], [data-backdrop]').evaluateAll(nodes => nodes.every(el => !el.getClientRects().length || getComputedStyle(el).visibility === "hidden" || getComputedStyle(el).opacity === "0")), label + ": no visible backdrop");
+  if (width > 640) {
+    check(rect.width >= 260 && rect.width <= 320 && rect.width <= width * .26 + 1, label + ": drawer width is clamped to 260–320px and at most 26vw");
+    check(Math.abs(rect.x + rect.width - width) <= 1 && Math.abs(rect.y - 44) <= 1 && Math.abs(rect.y + rect.height - height) <= 1, label + ": full-height right drawer sits below top bar");
+    check(frame.x + frame.width <= rect.x + .5 && Math.abs(frame.x + frame.width - rect.x) <= 1, label + ": iframe ends at the drawer's left edge");
+    const bar = await page.locator("#bar").boundingBox();
+    check(bar.x + bar.width <= rect.x + .5, label + ": top bar shrinks with the iframe");
+    for (const button of await page.locator("#bar button:visible").all()) {
+      const box = await button.boundingBox();
+      check(!intersects(rect, box) && box.x + box.width <= rect.x + .5 && await button.evaluate(el => { const r = el.getBoundingClientRect(); return el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)); }), label + ": visible top-bar button is uncovered and clickable");
+    }
+  }
   else {
     const radius = await page.locator("#panel").evaluate(el => parseFloat(getComputedStyle(el).borderTopLeftRadius));
-    check(Math.abs(rect.x) <= 1 && Math.abs(rect.width - width) <= 1 && Math.abs(rect.y + rect.height - height) <= 1 && rect.height / height > .65 && rect.height / height < .78 && radius > 0, label + ": rounded bottom sheet uses about 72% height");
+    check(Math.abs(rect.x) <= 1 && Math.abs(rect.width - width) <= 1 && Math.abs(rect.y + rect.height - height) <= 1 && rect.height > 0 && rect.height <= height * .6 + 2 && radius > 0, label + ": rounded bottom sheet uses at most 60% height");
+    check(frame.y + frame.height <= rect.y + .5, label + ": mobile iframe ends above the sheet");
   }
+  check(await page.locator("#pbody").evaluate(el => getComputedStyle(el).overflowY === "auto" && el.clientHeight > 0 && el.scrollHeight >= el.clientHeight), label + ": drawer content remains scrollable");
+}
+function intersects(a, b) {
+  return a.x < b.x + b.width - .5 && a.x + a.width > b.x + .5 && a.y < b.y + b.height - .5 && a.y + a.height > b.y + .5;
+}
+async function assertTargetVisible(page, frame, selector, label) {
+  const target = await frame.locator(selector).boundingBox(), viewport = await page.locator("#frame").boundingBox(), drawer = await page.locator("#panel").boundingBox();
+  check(target && target.x >= viewport.x && target.y >= viewport.y && target.x + target.width <= viewport.x + viewport.width + .5 && target.y + target.height <= viewport.y + viewport.height + .5 && !intersects(target, drawer), label);
 }
 async function screenshot(page, filename) {
   const shot = path.join(shotsDir, filename);
@@ -210,9 +234,9 @@ try {
   check(true, "viewer comment API is forbidden");
   const c3 = await api(`/api/a/${id}/comments`, { request: request3, selector: null }, editToken);
 
-  for (const width of [1280, 390]) {
+  for (const [width, height] of [[1280, 850], [1024, 768], [390, 844]]) {
     const prefix = `${width}px`;
-    const context = await browser.newContext({ viewport: { width, height: width === 1280 ? 850 : 844 }, ...(width === 390 ? { isMobile: true, hasTouch: true, deviceScaleFactor: 1 } : {}) });
+    const context = await browser.newContext({ viewport: { width, height }, ...(width === 390 ? { isMobile: true, hasTouch: true, deviceScaleFactor: 1 } : {}) });
     await context.route("**/*", route => {
       const url = new URL(route.request().url());
       return url.origin === base || ["data:", "blob:"].includes(url.protocol) ? route.continue() : route.abort();
@@ -246,8 +270,9 @@ try {
       check(JSON.stringify(listIds) === JSON.stringify(fixtureComments.map(c => c.id).reverse()), `${prefix}: complete comment list is newest first with selected entry marked`);
       check((await page.locator("#commentList").innerText()).includes(request3), `${prefix}: full list includes the pending comment`);
       await assertHighlight(frame, cdp, `${sig} >> xpath=..`, `${prefix}: chip selection immediately highlights its answer`);
+      await assertTargetVisible(page, frame, sig, `${prefix}: located chip is inside the visible iframe and clear of the drawer`);
       check(!/\u{1F4CC}/u.test(await page.locator("body").innerText()) && !/\u{1F4CC}/u.test(await frame.locator("body").innerText()), `${prefix}: no pushpin glyph is visible`);
-      if (sig === "#sig1") await screenshot(page, `drawer-${width}.png`);
+      if (sig === "#sig1") await screenshot(page, `narrow-${width}.png`);
       await closeDrawer(page);
       check(await page.evaluate(() => document.activeElement === document.querySelector("#frame")), `${prefix}: close button restores focus to page iframe`);
       await frame.waitForFunction(selector => document.activeElement === document.querySelector(selector), sig);
@@ -281,14 +306,19 @@ try {
     check(await page.locator("#panel.show").isVisible(), `${prefix}: iframe scrolling keeps drawer open`);
     // The top bar is outside; it stays usable while the drawer is open.
     await page.locator("#bar").click({ position: { x: 2, y: 2 } });
-    await page.locator("#panel").waitFor({ state: "hidden" });
-    check(true, `${prefix}: host outside click closes drawer`);
+    if (width > 640) check(await page.locator("#panel.show").isVisible(), `${prefix}: host outside click keeps desktop drawer open`);
+    else { await page.locator("#panel").waitFor({ state: "hidden" }); check(true, `${prefix}: host outside click closes mobile sheet`); }
     await clickSignature(page, frame, "#sig2");
     await frame.evaluate(() => scrollTo(0, 0));
     await page.waitForTimeout(250);
     await frame.locator("h1").click({ position: { x: 8, y: 8 } });
-    await page.locator("#panel").waitFor({ state: "hidden" });
-    check(true, `${prefix}: iframe outside click closes drawer`);
+    if (width > 640) {
+      await page.waitForTimeout(200);
+      check(await page.locator("#panel.show").isVisible(), `${prefix}: iframe outside click keeps desktop drawer open`);
+      await page.keyboard.press("Escape");
+      await page.locator("#panel").waitFor({ state: "hidden" });
+      check(true, `${prefix}: Escape from inside the iframe still closes the drawer`);
+    } else { await page.locator("#panel").waitFor({ state: "hidden" }); check(true, `${prefix}: iframe outside click closes mobile sheet`); }
     // Chip clicks while a drawer is already open switch selection instead of dismissing it.
     await clickSignature(page, frame, "#sig1");
     await frame.locator("#sig2").evaluate(el => scrollTo(0, el.getBoundingClientRect().top + scrollY - 60));
@@ -301,7 +331,9 @@ try {
       const before = await frame.evaluate(() => scrollY);
       await page.locator("#commentLocate").click();
       await assertHighlight(frame, cdp, target, `${prefix}: Locate button scrolls to original target and flashes highlight`);
+      await assertTargetVisible(page, frame, target, `${prefix}: Locate target is visible above or beside the drawer`);
       check((await frame.evaluate(() => scrollY)) > before + 500 && await page.locator("#panel.show").isVisible(), `${prefix}: Locate jumps to original text without closing drawer`);
+      if (width === 390 && sig === "#sig2") await screenshot(page, "narrow-390-locate.png");
     }
     await page.locator(`[data-comment="${c3.comment_id}"]`).click();
     check((await page.locator("#commentDetail").innerText()).includes("整个页面 Whole page") && (await page.locator("#commentDetail").innerText()).includes("待处理"), `${prefix}: whole-page pending comment shows its scope and status`);
@@ -371,7 +403,7 @@ try {
     await frame.waitForFunction(() => document.querySelector("#selection").isContentEditable);
     await frame.locator("#selection").scrollIntoViewIfNeeded(); await page.waitForTimeout(250);
     const selection = frame.locator("#selection");
-    if (width === 1280) {
+    if (width > 640) {
       const box = await selection.boundingBox();
       await page.mouse.move(box.x + 2, box.y + box.height / 2);
       await page.mouse.down(); await page.mouse.move(box.x + Math.min(190, box.width - 3), box.y + box.height / 2, { steps: 12 }); await page.mouse.up();
@@ -379,7 +411,7 @@ try {
       await selection.evaluate(el => { const r = document.createRange(); r.selectNodeContents(el); const s = getSelection(); s.removeAllRanges(); s.addRange(r); });
     }
     const selected = await frame.evaluate(() => getSelection().toString().trim());
-    check(selected.length > 4, `${prefix}: ${width === 1280 ? "mouse drag preserves selected text" : "DOM Range creates selected text for mobile-width form test"}`);
+    check(selected.length > 4, `${prefix}: ${width > 640 ? "mouse drag preserves selected text" : "DOM Range creates selected text for mobile-width form test"}`);
     await page.locator("#askChip.show").waitFor();
     await page.locator("#askChip").click();
     await page.locator("#cmModal.show").waitFor();
@@ -388,13 +420,14 @@ try {
     await page.locator("#bHistory").evaluate(el => el.click());
     await page.waitForFunction(() => document.querySelector("#pbody").textContent.includes("Cya.Editor 修改"));
     check((await page.locator("#pbody").innerText()).includes("Cya 修改"), `${prefix}: programmatically opened history distinguishes Cya and Cya.Editor`);
-    await page.locator("#pclose").click();
+    if (width > 640) await assertDrawerLayout(page, width, `${prefix} history`);
+    await closeDrawer(page);
     check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${prefix}: host has no horizontal overflow`);
     check(errors.length === 0, `${prefix}: editor has no browser errors`);
     results.browserErrors.push(...errors);
     await context.close();
 
-    const viewerContext = await browser.newContext({ viewport: { width, height: width === 1280 ? 850 : 844 } });
+    const viewerContext = await browser.newContext({ viewport: { width, height } });
     await viewerContext.route("**/*", route => new URL(route.request().url()).origin === base ? route.continue() : route.abort());
     const viewer = await viewerContext.newPage(), viewerErrors = [];
     let viewerCommentRequests = 0;
