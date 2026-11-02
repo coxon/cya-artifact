@@ -627,11 +627,13 @@
     openComments({ cid: m.cid, n: commentNumber(txt), by: (txt.match(/^\s*(.+?)\s*答(?:\s|·|$)/) || [])[1] || "" }, "chip");
   }
   function openComments(selection, prefer) {
+    if (!showPanel("comments")) return;
     if (mode === "comment") setMode("edit");
     hideChip();
     var request = ++commentOpenRequest;
     commentSelection = selection || null;
-    showPanel("comments"); renderComments(true); $("#pclose").focus({ preventScroll: true });
+    renderComments(true);
+    var focus = $("#pclose") || $("#commentDetail"); if (focus) focus.focus({ preventScroll: true });
     var c = editor && commentSelection ? findComment(commentSelection) : null;
     // A known selection locates immediately. Opening the list alone never moves the page.
     if (c || (!editor && commentSelection && (commentSelection.cid || commentSelection.n))) locate(c, prefer);
@@ -644,10 +646,13 @@
   function selectComment(id) {
     var c = findComment({ cid: id }); if (!editor || !c) return;
     commentOpenRequest++; commentSelection = { cid: c.id };
-    renderComments(true); $("#commentDetail").focus({ preventScroll: true }); locate(c, "sel");
+    renderComments(true);
+    var detail = $("#commentDetail"); if (detail) detail.focus({ preventScroll: true });
+    locate(c, "sel");
   }
   function renderComments(resetScroll) {
-    var body = $("#pbody"), active = document.activeElement, focusId = body.contains(active) ? active.id : null;
+    var body = $("#pbody"); if (!body) return;
+    var active = document.activeElement, focusId = body.contains(active) ? active.id : null;
     var input = $("#pgReq"), draft = input ? input.value : "", start = input && input.selectionStart, end = input && input.selectionEnd;
     var scroll = body.scrollTop, c = editor && commentSelection ? findComment(commentSelection) : null, h = "";
     // Once resolved, use the stable ID even if subsequent reloads change the comment ordering.
@@ -691,7 +696,7 @@
       $("#pgSend").onclick = function () { var v = $("#pgReq").value.trim(); if (!v) return; $("#pgSend").disabled = true; submitCommentDirect(v); };
     }
     if (!resetScroll && focusId) {
-      var next = document.getElementById(focusId) || $("#pclose"); next.focus({ preventScroll: true });
+      var next = document.getElementById(focusId) || $("#pclose"); if (next) next.focus({ preventScroll: true });
       if (focusId === "pgReq" && $("#pgReq")) $("#pgReq").setSelectionRange(start, end);
     }
     body.scrollTop = resetScroll ? 0 : scroll;
@@ -707,9 +712,10 @@
   /* ---------- history ---------- */
   var SRC = { generated: "生成 Generated", hand: "手动编辑 Hand edit", cya: "发布者修改 Publisher edit", restore: "恢复 Restore" };
   function loadHistory() {
-    $("#pbody").innerHTML = '<p class="empty">加载中… Loading…</p>';
+    var body = $("#pbody"); if (!body) return;
+    body.innerHTML = '<p class="empty">加载中… Loading…</p>';
     api("/versions").then(function (d) {
-      if (panel !== "history") return;
+      if (panel !== "history" || !$("#pbody")) return;
       var vs = d.versions || [], cur = d.current, h = "";
       vs.forEach(function (v) {
         var lab = v.source === "cya" ? esc(name(v.author) || "Assistant") + " 修改" : v.source === "hand" && name(v.author) ? "手动编辑 · " + esc(name(v.author)) : (SRC[v.source] || SRC.generated);
@@ -720,7 +726,7 @@
       $("#pbody").innerHTML = h || '<p class="empty">No versions</p>';
       $("#pbody").querySelectorAll("[data-pv]").forEach(function (b) { b.onclick = function () { preview(+b.dataset.pv, cur); }; });
       $("#pbody").querySelectorAll("[data-rs]").forEach(function (b) { b.onclick = function () { restore(+b.dataset.rs); }; });
-    }).catch(function (e) { if (panel === "history") $("#pbody").innerHTML = '<p class="empty err">' + esc(e.message) + "</p>"; });
+    }).catch(function (e) { if (panel === "history" && $("#pbody")) $("#pbody").innerHTML = '<p class="empty err">' + esc(e.message) + "</p>"; });
   }
   function preview(n, cur) {
     api("/versions/" + n).then(function (d) {
@@ -738,26 +744,32 @@
   /* ---------- panel / menu ---------- */
   var panelReturnFocus = null;
   function showPanel(which) {
+    var drawer = $("#panel"), heading = $("#ptitle"), title = which === "history" ? "版本历史 History" : "评论 Comments";
+    if (!drawer || !$("#pbody")) {
+      if ($("#toast")) toast("请刷新页面以查看评论和历史 · Reload to view comments and history", 5000);
+      return false;
+    }
     if (!panel || document.activeElement === frame) panelReturnFocus = document.activeElement;
     panel = which;
-    var drawer = $("#panel"), title = which === "history" ? "版本历史 History" : "评论 Comments";
     drawer.inert = false; drawer.setAttribute("aria-hidden", "false"); drawer.setAttribute("aria-label", title); drawer.dataset.surface = which;
-    drawer.classList.add("show"); $("#ptitle").textContent = title;
+    drawer.classList.add("show"); if (heading) heading.textContent = title;
     document.body.classList.add("panel-open");
     document.body.classList.toggle("comments-open", which === "comments");
+    return true;
   }
   function openPanel(which, focusId) {
     if (!editor) return;
     if (which === "comments") { openComments(focusId ? { cid: focusId } : null, "sel"); return; }
     if (panel === "history") { closePanel(); return; }
+    if (!showPanel("history")) return;
     commentOpenRequest++; commentSelection = null;
-    showPanel("history"); loadHistory(); $("#pclose").focus({ preventScroll: true });
+    loadHistory(); if ($("#pclose")) $("#pclose").focus({ preventScroll: true });
   }
   function closePanel(restoreFocus) {
     if (!panel) return;
     commentOpenRequest++; panel = null; commentSelection = null;
     var drawer = $("#panel"), back = panelReturnFocus; panelReturnFocus = null;
-    drawer.classList.remove("show"); drawer.inert = true; drawer.setAttribute("aria-hidden", "true");
+    if (drawer) { drawer.classList.remove("show"); drawer.inert = true; drawer.setAttribute("aria-hidden", "true"); }
     document.body.classList.remove("panel-open", "comments-open");
     if (restoreFocus !== false && back && back.isConnected) {
       back.focus({ preventScroll: true });
@@ -778,12 +790,12 @@
   if ($("#bExport")) $("#bExport").onclick = function () { location.href = "/a/" + B.id + "/export"; };
   $("#bComment").onclick = function () { setMode("comment"); };
   $("#bHistory").onclick = function () { openPanel("history"); };
-  $("#pclose").onclick = closePanel;
+  if ($("#pclose")) $("#pclose").onclick = closePanel;
   $("#cmSend").onclick = submitComment; $("#cmCancel").onclick = function () { $("#cmModal").classList.remove("show"); };
   $("#cmReq").addEventListener("keydown", function (e) { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitComment(); });
   $("#pvClose").onclick = function () { $("#pvModal").classList.remove("show"); $("#pvFrame").srcdoc = ""; };
   document.addEventListener("keydown", function (e) { if (e.key === "Escape") { closePanel(); $("#cmModal").classList.remove("show"); $("#pvModal").classList.remove("show"); if (mode === "comment") setMode("edit"); hideChip(); } });
-  document.addEventListener("click", function (e) { if (panel === "comments" && matchMedia("(max-width:640px)").matches && !$("#panel").contains(e.target)) closePanel(); }, true);
+  document.addEventListener("click", function (e) { var drawer = $("#panel"); if (panel === "comments" && matchMedia("(max-width:640px)").matches && (!drawer || !drawer.contains(e.target))) closePanel(); }, true);
   window.addEventListener("resize", hideChip);
 
   /* ---------- init ---------- */

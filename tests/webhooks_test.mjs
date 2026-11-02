@@ -10,6 +10,7 @@ const source = readFileSync(new URL("../worker.src.js", import.meta.url), "utf8"
   .replace(/export class /g, "class ")
   .replace("export default {", "globalThis.worker = {")
   .replace(/__SDK_SOURCE__|__SDK_OFFLINE__|__BRIDGE__|__HOST_JS__/g, '""')
+  .replace("__ASSET_HASHES__", "{}")
   + "\nglobalThis.subject = { notify, notifyJob, artifactCsp, hostCsp };";
 
 // Each test gets fresh globals. fetch always uses a local mock, never Node's fetch.

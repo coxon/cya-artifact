@@ -52,6 +52,7 @@ try {
   // Set parent values for fixture helpers imported after the server starts.
   process.env.ARTIFACT_BASE_URL = origin; process.env.ADMIN_TOKEN = token;
   await run("tests/api_test.mjs");
+  await run("tests/asset_cache_test.mjs");
   const { createPage } = await import("./local_helpers.mjs");
   const { readFile } = await import("node:fs/promises");
   const counter = await createPage(await readFile(path.join(root, "tests/counter.html"), "utf8"));

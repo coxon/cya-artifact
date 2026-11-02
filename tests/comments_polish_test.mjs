@@ -431,11 +431,17 @@ try {
     await viewerContext.route("**/*", route => new URL(route.request().url()).origin === base ? route.continue() : route.abort());
     const viewer = await viewerContext.newPage(), viewerErrors = [];
     let viewerCommentRequests = 0;
-    viewer.on("request", request => { if (new URL(request.url()).pathname === `/api/a/${id}/comments`) viewerCommentRequests++; });
+    const viewerAssets = new Map();
+    viewer.on("request", request => {
+      const url = new URL(request.url());
+      if (url.pathname === `/api/a/${id}/comments`) viewerCommentRequests++;
+      if (["/host.js", "/bridge.js", "/sdk.js"].includes(url.pathname)) viewerAssets.set(url.pathname, url.search);
+    });
     viewer.on("pageerror", e => viewerErrors.push(redact(e)));
     await viewer.goto(`${base}/a/${id}`); const viewerFrame = await frameOf(viewer);
     check(!await viewer.evaluate(() => document.body.classList.contains("is-editor")) && await viewerFrame.evaluate(() => !document.querySelector("[contenteditable]")), `${prefix}: fresh viewer has no editor role or editable elements`);
-    await clickSignature(viewer, viewerFrame, "#sig2");
+    check(viewerAssets.size === 3 && [...viewerAssets.values()].every(query => /^\?v=[a-f0-9]{10}$/.test(query)), `${prefix}: viewer loads host, bridge and SDK through versioned URLs`);
+    await clickSignature(viewer, viewerFrame, "#sig2.by[data-cid]");
     const viewerText = await viewer.locator("#commentDetail").innerText();
     check(viewerText.includes("评论 2") && viewerText.includes("Cya.Editor") && viewerText.includes("评论内容只有用编辑链接打开才能看到 · Open with the editor link to see the comment") && ![request1, request2, request3, text1, text2, "审阅者"].some(text => viewerText.includes(text)), `${prefix}: viewer sees only chip number, answerer and permission hint`);
     check(await viewer.locator("#commentList, #pgReq, #pgSend").count() === 0, `${prefix}: viewer drawer has no comment list or composer`);
@@ -444,6 +450,42 @@ try {
     check(viewerCommentRequests === 0, `${prefix}: viewer never requests private comment API`);
     check(await viewer.locator("#bComments").count() === 0 && viewerErrors.length === 0, `${prefix}: viewer has no toolbar button or browser errors`);
     results.browserErrors.push(...viewerErrors); await viewerContext.close();
+  }
+  // Simulate a shell/script mismatch before host.js initializes, then click a real chip.
+  for (const role of ["viewer", "editor"]) for (const missing of ["panel", "pbody", "ptitle", "pclose"]) {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 850 } });
+    await context.route("**/*", async route => {
+      const url = new URL(route.request().url());
+      if (url.origin !== base) return route.abort();
+      if (url.pathname !== `/a/${id}`) return route.continue();
+      const response = await route.fetch();
+      // Renaming the element makes the expected selector unavailable during initialization.
+      return route.fulfill({ response, body: (await response.text()).replace(`id="${missing}"`, `data-missing-id="${missing}"`) });
+    });
+    const page = await context.newPage(), errors = [];
+    page.on("pageerror", error => errors.push(redact(error)));
+    await page.goto(`${base}/a/${id}${role === "editor" ? `?edit=${encodeURIComponent(editToken)}` : ""}`);
+    if (role === "editor") await page.waitForFunction(() => document.body.classList.contains("m-edit"));
+    const frame = await frameOf(page);
+    const label = `${role} with missing #${missing}`;
+    if (missing === "panel" || missing === "pbody") {
+      await frame.locator("#sig2.by[data-cid]").click();
+      await page.waitForFunction(() => document.querySelector("#toast").textContent.includes("Reload"));
+      check(!await page.evaluate(() => document.body.classList.contains("panel-open")), `${label}: chip shows reload hint without opening an empty drawer`);
+      if (role === "editor") {
+        await page.locator("#bHistory").evaluate(el => el.click());
+        check(!await page.evaluate(() => document.body.classList.contains("panel-open")), `${label}: history also degrades gracefully`);
+      }
+    } else {
+      await clickSignature(page, frame, "#sig2.by[data-cid]");
+      check((await page.locator("#commentDetail").innerText()).includes("评论 2"), `${label}: comment still opens`);
+      // Closing must also tolerate the drawer disappearing while it is open.
+      await page.locator("#panel").evaluate(el => el.remove());
+      await page.keyboard.press("Escape");
+      check(!await page.evaluate(() => document.body.classList.contains("panel-open")), `${label}: Escape cleans up after drawer removal`);
+    }
+    check(errors.length === 0, `${label}: no browser errors`);
+    results.browserErrors.push(...errors); await context.close();
   }
   const invalidContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await invalidContext.route("**/*", route => new URL(route.request().url()).origin === base ? route.continue() : route.abort());

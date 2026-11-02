@@ -4,6 +4,23 @@ const SDK = __SDK_SOURCE__;
 const SDK_OFFLINE = __SDK_OFFLINE__;
 const BRIDGE = __BRIDGE__;
 const HOST_JS = __HOST_JS__;
+const ASSET_HASHES = __ASSET_HASHES__;
+
+function assetResponse(req, url, source, hash) {
+  const etag = `"${hash}"`;
+  const headers = {
+    "content-type": "application/javascript; charset=utf-8",
+    "cache-control": url.searchParams.get("v") === hash ? "public, max-age=31536000, immutable" : "no-cache",
+    etag,
+  };
+  // If-None-Match uses weak comparison for GET/HEAD, including lists and '*'.
+  const matches = (req.headers.get("if-none-match") || "").split(",").some(value => {
+    const tag = value.trim();
+    return tag === "*" || tag.replace(/^W\//, "") === etag;
+  });
+  if ((req.method === "GET" || req.method === "HEAD") && matches) return new Response(null, { status: 304, headers });
+  return new Response(req.method === "HEAD" ? null : source, { headers });
+}
 const MAX_STATE = 1024 * 1024;          // 1 MB total shared state per artifact
 const MAX_MSG = 256 * 1024;             // 256 KB per websocket message
 const MAX_HTML = 1536 * 1024;
@@ -489,8 +506,8 @@ function injectSdk(html, id, state, title, { offline = false, bridge = false, ba
     boot = `<script>window.__ARTIFACT_BOOT__=${bootJson};
 ${scriptSafe(SDK_OFFLINE)}</script>`;
   } else {
-    const extra = bridge ? `<script src="/bridge.js" defer></script>` : "";
-    boot = `<script>window.__ARTIFACT_BOOT__=${bootJson};</script><script src="/sdk.js"></script>${extra}`;
+    const extra = bridge ? `<script src="/bridge.js?v=${ASSET_HASHES["bridge.js"]}" defer></script>` : "";
+    boot = `<script>window.__ARTIFACT_BOOT__=${bootJson};</script><script src="/sdk.js?v=${ASSET_HASHES["sdk.js"]}"></script>${extra}`;
   }
   boot += (banner || "");
   const meta = `<meta charset="utf-8">`;
@@ -635,7 +652,7 @@ function hostPage(id, title, status) {
 <div id="toast"></div><button id="askChip">💬 <span id="askTxt">评论这里</span></button>
 <div id="liveMd" aria-label="Markdown live writing"></div><div id="livePill" hidden><i></i><span id="liveTxt"></span><button id="liveToggle" type="button"></button></div>
 <script>window.__HOST__=${JSON.stringify({ id, status }).replace(/</g, "\\u003c")};</script>
-<script src="/host.js" defer></script></body></html>`;
+<script src="/host.js?v=${ASSET_HASHES["host.js"]}" defer></script></body></html>`;
 }
 const hostCsp = (url) => HOST_CSP.replace("connect-src 'self'", `connect-src 'self' ${socketOrigin(url)}`);
 const HOST_CSP = [
@@ -917,9 +934,9 @@ export default {
     const parts = url.pathname.split("/");
     try {
       if (url.pathname === "/" && req.method === "GET") return new Response(createPage(), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "content-security-policy": "frame-ancestors 'none'" } });
-      if (url.pathname === "/sdk.js") return new Response(SDK, { headers: { "content-type": "application/javascript; charset=utf-8", "cache-control": "public, max-age=86400" } });
-      if (url.pathname === "/bridge.js") return new Response(BRIDGE, { headers: { "content-type": "application/javascript; charset=utf-8", "cache-control": "public, max-age=86400" } });
-      if (url.pathname === "/host.js") return new Response(HOST_JS, { headers: { "content-type": "application/javascript; charset=utf-8", "cache-control": "public, max-age=86400" } });
+      if (url.pathname === "/sdk.js") return assetResponse(req, url, SDK, ASSET_HASHES["sdk.js"]);
+      if (url.pathname === "/bridge.js") return assetResponse(req, url, BRIDGE, ASSET_HASHES["bridge.js"]);
+      if (url.pathname === "/host.js") return assetResponse(req, url, HOST_JS, ASSET_HASHES["host.js"]);
       if (url.pathname === "/api/create" && req.method === "POST") return handleCreate(req, env, ctx, url);
       if (parts[1] === "api" && parts[2] === "admin") return handleAdmin(req, env, ctx, url, parts);
       if (parts[1] === "api" && parts[2] === "a" && ID_RE.test(parts[3] || "") && parts.length <= 6) return handleEditorApi(req, env, ctx, url, parts[3], parts[4] || "", parts[5] || "");
