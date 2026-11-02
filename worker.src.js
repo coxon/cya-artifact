@@ -533,7 +533,7 @@ body{--drawer-width:clamp(260px,26vw,320px);--sheet-height:60vh;--content-right:
 #bMenu{min-width:34px;justify-content:center;font-size:15px;color:#5c5b57;border:1px solid #e3e0d6;background:#faf9f5;border-radius:999px;padding:6px 10px}
 #bMenu:hover{background:#fff;border-color:#d4d1c7}
 .ed{display:none!important}.is-editor .ed{display:none!important}
-.save{font-size:12px;color:#73726c;white-space:nowrap}.save.saving,.save.editing{color:#b45309}.save.saved{color:#3d7a5a}.save.error,.save.conflict{color:#b42318}.m-edit .save{display:inline}.save{display:none}
+.save{font-size:12px;color:#73726c;white-space:nowrap}.save.saving,.save.editing{color:#b45309}.save.saved{color:#3d7a5a}.save.error,.save.conflict{color:#b42318}.m-edit .save{display:inline}.save,.save:empty{display:none}
 #hint{position:fixed;top:44px;left:0;right:var(--content-right);z-index:9;font-size:12px;text-align:center;padding:6px 10px;display:none}.m-comment #hint{display:block;background:#f6e6df;color:#7a3b28}.is-editor #mHow{display:none}
 #frame,#live,#liveMd{position:fixed;top:var(--content-top);left:0;width:calc(100% - var(--content-right));height:calc(100% - var(--content-top) - var(--content-bottom));border:0}
 #frame{background:#f3eee4}

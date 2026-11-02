@@ -15,6 +15,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npx playwright install --with-deps chromium
       - run: npm run build
       # Dependencies are installed above; tests use only local workerd/loopback,
       # generated test credentials, and fresh SQLite storage. No deploy step.

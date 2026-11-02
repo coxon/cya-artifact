@@ -41,7 +41,7 @@ try {
   browser = await chromium.launch(launchOptions("chromium"));
   const errors = [];
   const open = async editor => {
-    const context = await browser.newContext({viewport:{width:1200,height:900}, acceptDownloads:true});
+    const context = await browser.newContext({viewport:{width:1280,height:900}, acceptDownloads:true});
     await blockExternal(context);
     const page = await context.newPage();
     page.on("dialog", dialog => dialog.accept());
@@ -53,6 +53,9 @@ try {
   };
   const E1 = await open(true), E2 = await open(true), V = await open(false);
   check("editors land in always-on editing", await E1.locator("body").evaluate(el => el.classList.contains("is-editor") && el.classList.contains("m-edit")));
+  check("editor toolbar has no edit instructions at 1280px", !/点文字即可编辑|Click text to edit/.test(await E1.locator("#bar").textContent()));
+  check("editor save status starts empty with its base class", await E1.locator("#save").evaluate(el => el.textContent === "" && el.className === "save"));
+  check("empty save status is hidden and takes no toolbar space", await E1.locator("#save").evaluate(el => getComputedStyle(el).display === "none" && el.getClientRects().length === 0));
   check("viewer has no editor capabilities", await V.locator("body").evaluate(el => !el.classList.contains("is-editor")) && !await raw(V).locator("[contenteditable=true]").count());
   check("iframe URL never contains editor token", !await E1.locator("#frame").evaluate(el => el.src.includes("edit=")));
   check("app controls remain non-editable", await raw(E1).locator("#inc").evaluate(el => !el.isContentEditable));
@@ -66,6 +69,8 @@ try {
   const first = await artifact("/html");
   check("static text accepts a hand edit", await changeText(E1, ".sub", "Static text", "Edited text"));
   await until(async () => (await artifact("/html")).html.includes("Edited text"), "hand edit persisted");
+  await until(async () => await E1.locator("#save").isVisible() && /^已保存 Saved · v\d+$/.test(await E1.locator("#save").textContent()), "saved version status visible after editing");
+  check("autosave displays the saved version in the toolbar", true);
   const saved = await artifact("/html");
   check("hand edit creates version", saved.version > first.version);
   check("stored source excludes editor instrumentation", !/contenteditable|data-artifact-editor|artifact-overlay|__ARTIFACT_BOOT__|__AE_BRIDGE__/.test(saved.html));

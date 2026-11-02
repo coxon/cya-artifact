@@ -19,20 +19,20 @@ Edit source files, not `dist/worker.js`.
 ## Tests
 
 ```sh
+npx playwright install chromium
 npm run build
 npm test
 ```
 
-The default test runner checks webhook delivery with mocked fetches, starts an isolated local Wrangler instance with generated credentials, exercises API and helper workflows, and verifies multi-client WebSocket synchronization. Tests do not require external network access, production secrets, or a deployed Worker. It stops the server on completion. Dependency installation is a separate setup step.
+The default test runner checks webhook delivery with mocked fetches, starts an isolated local Wrangler instance with generated credentials, exercises API and helper workflows, verifies multi-client WebSocket synchronization, and runs the editor UI regression suite in Chromium. Tests do not require external network access, production secrets, or a deployed Worker. It stops the server on completion. Dependency and browser installation are separate setup steps.
 
-For browser regressions, install browser binaries once, then run:
+For additional browser regressions, run:
 
 ```sh
-npx playwright install chromium
 npm run test:browser
 ```
 
-This includes the core tests plus comment attribution/navigation, editor UI, desktop/mobile editing, and the waiting-page/live-draft flow in Chromium. For the extended matrix, also install WebKit:
+This includes the core tests plus comment attribution/navigation, desktop/mobile editing, and the waiting-page/live-draft flow in Chromium. For the extended matrix, also install WebKit:
 
 ```sh
 npx playwright install webkit

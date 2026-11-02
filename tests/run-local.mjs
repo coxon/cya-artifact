@@ -57,17 +57,17 @@ try {
   const { readFile } = await import("node:fs/promises");
   const counter = await createPage(await readFile(path.join(root, "tests/counter.html"), "utf8"));
   await run("tests/ws_test.mjs", [], { TEST_ARTIFACT_ID: counter.artifact_id });
+  const fixture = await readFile(path.join(root, "tests/edit_fixture.html"), "utf8");
+  const ui = await createPage(fixture);
+  await run("tests/ui_test.mjs", [], { TEST_ARTIFACT_ID: ui.artifact_id, TEST_EDIT_TOKEN: ui.edit_token });
   if (browser) {
     await run("tests/comments_polish_test.mjs", [], { COMMENTS_TEST_ORIGIN: origin, COMMENTS_TEST_ADMIN_TOKEN: token });
-    const fixture = await readFile(path.join(root, "tests/edit_fixture.html"), "utf8");
-    const ui = await createPage(fixture);
-    await run("tests/ui_test.mjs", [], { TEST_ARTIFACT_ID: ui.artifact_id, TEST_EDIT_TOKEN: ui.edit_token });
     const ux = await createPage(fixture);
     await run("tests/edit_ux_test.mjs", [], { TEST_ARTIFACT_ID: ux.artifact_id, TEST_EDIT_TOKEN: ux.edit_token, TEST_ENGINES: all ? "chromium,webkit" : "chromium" });
     await run("tests/waiting_test.mjs", [all ? "chromium,webkit" : "chromium"]);
   }
   await mkdir(path.join(root, ".codex-run"), { recursive: true });
-  await writeFile(path.join(root, ".codex-run/local-suite.json"), JSON.stringify({ status: "passed", suite: all ? "all" : browser ? "browser" : "api", freshStorage: true, remoteCredentials: false, webhooksConfigured: false, finished: new Date().toISOString() }, null, 2) + "\n");
+  await writeFile(path.join(root, ".codex-run/local-suite.json"), JSON.stringify({ status: "passed", suite: all ? "all" : browser ? "browser" : "core", freshStorage: true, remoteCredentials: false, webhooksConfigured: false, finished: new Date().toISOString() }, null, 2) + "\n");
   console.log("\nPASS: local deployment and requested regression suites");
 } catch (error) {
   console.error(redacted(error.stack || error));

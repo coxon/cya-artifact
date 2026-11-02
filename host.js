@@ -20,7 +20,7 @@
     clearTimeout(toast._t); if (ms !== 0) toast._t = setTimeout(function () { t.className = ""; }, ms || 3500);
   }
   function fmt(ts) { var d = new Date(+ts); return ts == null || !Number.isFinite(d.getTime()) ? "时间未知" : d.toLocaleString(undefined, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
-  function setSave(s, v) { var el = $("#save"); if (!el) return; el.className = "save " + s; el.textContent = { editing: "编辑中… Editing", saving: "保存中… Saving", saved: "已保存 Saved" + (v ? " · v" + v : ""), error: "保存失败 Save failed", conflict: "冲突 Conflict", idle: "✏️ 点文字即可编辑 · Click text to edit" }[s] || ""; }
+  function setSave(s, v) { var el = $("#save"); if (!el) return; el.textContent = { editing: "编辑中… Editing", saving: "保存中… Saving", saved: "已保存 Saved" + (v ? " · v" + v : ""), error: "保存失败 Save failed", conflict: "冲突 Conflict" }[s] || ""; el.className = el.textContent ? "save " + s : "save"; }
 
   /* ---------- iframe ---------- */
   var lastReload = 0, frameReadyAt = 0, reloadTimer = null;
