@@ -1,0 +1,27 @@
+name = "cya-artifact"
+main = "dist/worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[build]
+command = "node build.mjs"
+
+[observability]
+enabled = true
+
+[[durable_objects.bindings]]
+name = "ARTIFACT"
+class_name = "ArtifactDO"
+
+[[durable_objects.bindings]]
+name = "INDEX"
+class_name = "IndexDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ArtifactDO", "IndexDO"]
+
+# Optional custom hostname: copy this file to ignored wrangler.local.toml,
+# then add routes = [{ pattern = "reports.example.com", custom_domain = true }]
+# at the top level. The default deployment uses your workers.dev address.
+# For an existing deployment, preserve its Worker name and migration history.

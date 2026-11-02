@@ -1,0 +1,33 @@
+import assert from "node:assert/strict";
+import { base } from "./local_helpers.mjs";
+// Two-client sync + persistence test. Usage: node tests/ws_test.mjs <artifact_id>
+const id = process.env.TEST_ARTIFACT_ID || process.argv[2];
+assert(id, "TEST_ARTIFACT_ID is required");
+const U = `${base.replace(/^http/, "ws")}/a/${id}/ws`;
+const open = (name) => new Promise((res, rej) => { const ws = new WebSocket(U); const c = { ws, name, msgs: [] };
+  ws.onmessage = (e) => { const m = JSON.parse(e.data); c.msgs.push(m); if (m.t === "init") { c.init = m; res(c); } c.on && c.on(m); };
+  ws.onerror = (e) => rej(new Error(name + " ws error")); });
+const wait = (c, pred, ms = 5000) => new Promise((res, rej) => { const t = setTimeout(() => rej(new Error(c.name + " timeout")), ms);
+  c.on = (m) => { if (pred(m)) { clearTimeout(t); c.on = null; res(m); } }; });
+const A = await open("A"); console.log("A init", JSON.stringify(A.init.state), "presence", A.init.presence);
+const pA = wait(A, (m) => m.t === "presence" && m.n === 2);
+const B = await open("B"); console.log("B init presence", B.init.presence); await pA; console.log("A sees presence 2");
+const start = A.init.state.count ?? 0, stamp = Date.now();
+const got = wait(B, (m) => m.t === "ops" && m.changes.count === start + 1);
+A.ws.send(JSON.stringify({ t: "merge", changes: { count: start + 1, lastTest: stamp }, from: "testA" }));
+await got; console.log("B received A's update: count", start + 1);
+const got2 = wait(A, (m) => m.t === "ops" && m.changes.count === start + 2);
+B.ws.send(JSON.stringify({ t: "merge", changes: { count: start + 2 }, from: "testB" }));
+await got2; console.log("A received B's update: count", start + 2);
+const big = wait(B, (m) => m.t === "error");
+B.ws.send(JSON.stringify({ t: "merge", changes: { big: "x".repeat(200000) }, from: "testB" }));
+B.ws.send(JSON.stringify({ t: "merge", changes: { big2: "x".repeat(200000) } })); // fine
+for (let i = 3; i < 7; i++) B.ws.send(JSON.stringify({ t: "merge", changes: { ["big" + i]: "x".repeat(200000) } }));
+const e = await big; console.log("size cap enforced:", e.message);
+B.ws.send(JSON.stringify({ t: "merge", changes: { big: null, big2: null, big3: null, big4: null, big5: null, big6: null } }));
+await new Promise((r) => setTimeout(r, 800));
+A.ws.close(); B.ws.close(); await new Promise((r) => setTimeout(r, 1500));
+const C = await open("C"); console.log("after reconnect state:", JSON.stringify(C.init.state));
+assert(C.init.state.count === start + 2 && C.init.state.lastTest === stamp, "state must persist across reconnects");
+console.log("PERSISTENCE OK");
+C.ws.close(); setTimeout(() => process.exit(0), 300);

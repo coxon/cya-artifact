@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Editing and live writing fixture</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px; font: 18px/1.5 system-ui, sans-serif; color: #242424; background: #faf8f3; }
+  main { max-width: 680px; margin: auto; }
+  h1 { font-size: 30px; line-height: 1.2; }
+  button { padding: 12px 18px; margin: 4px; font: inherit; cursor: pointer; }
+  .dark { color: #f6f6f6; background: #242424; }
+  #n { font-size: 38px; margin: 12px 0; }
+</style>
+</head>
+<body>
+<main>
+<h1>Collaborative report</h1>
+<p class="sub">Static text can be edited in place.</p>
+<p id="left">Left paragraph remains independent.</p>
+<p id="right">Right paragraph remains independent.</p>
+<button id="theme" type="button">Toggle theme</button>
+<div id="n">0</div>
+<button id="dec" type="button">−</button><button id="inc" type="button">+</button>
+<div id="reacts"><button type="button">Like</button></div>
+<p id="pres">Connecting</p>
+<a href="#left">Jump to the left paragraph</a>
+</main>
+<script>
+  const counter = document.getElementById('n');
+  const reaction = document.querySelector('#reacts button');
+  const render = () => {
+    counter.textContent = artifact.get('count', 0);
+    reaction.textContent = 'Like ' + artifact.get('likes', 0);
+  };
+  artifact.subscribe(render); render();
+  document.getElementById('inc').onclick = () => artifact.set('count', artifact.get('count', 0) + 1);
+  document.getElementById('dec').onclick = () => artifact.set('count', artifact.get('count', 0) - 1);
+  reaction.onclick = () => artifact.set('likes', artifact.get('likes', 0) + 1);
+  document.getElementById('theme').onclick = () => document.body.classList.toggle('dark');
+  artifact.onPresence(n => { document.getElementById('pres').textContent = n + ' people online'; });
+</script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+# secrets — never commit
+.admin_token
+.invite_owner
+*token*
+*Token*
+.env*
+!.env.example
+*.secret
+secrets/
+*.pem
+*.key
+.dev.vars
+.dev.vars.*
+wrangler.local.toml
+wrangler.local.json
+wrangler.local.jsonc
+.wrangler/
+.codex-run/
+# runtime / scratch
+.edits/
+.drafts/
+node_modules/
+dist/
+shots/
+*.bak*
+# large binaries
+*.zip
+*.tar*
+*.mp4
+*.mov
+*.sqlite*

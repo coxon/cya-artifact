@@ -1,0 +1,20 @@
+{
+  "name": "cya-artifact",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted collaborative HTML reports on Cloudflare Workers and Durable Objects",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "node build.mjs && node --check dist/worker.js",
+    "dev": "wrangler dev --local --ip 127.0.0.1 --port 8787",
+    "test": "node tests/run-local.mjs",
+    "test:browser": "node tests/run-local.mjs --browser",
+    "test:all": "node tests/run-local.mjs --all"
+  },
+  "devDependencies": {
+    "playwright": "1.64.1",
+    "wrangler": "4.156.1"
+  }
+}
