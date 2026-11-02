@@ -48,7 +48,7 @@
       else if (m.t === "pick") { setMode("edit"); openCommentForm(m); }
       else if (m.t === "pin") openPanel("comments", m.id);
       else if (m.t === "by") showComment(m);
-      else if (m.t === "outside") { if (panel === "comments") closePanel(false); }
+      else if (m.t === "outside") { if (panel === "comments" && matchMedia("(max-width:640px)").matches) closePanel(false); }
       else if (m.t === "escape") { closePanel(); hideChip(); if (mode === "comment") setMode("edit"); }
       else if (m.t === "located") { if (!m.ok) toast("页面上找不到这个位置了（可能已被改写）· Location not found", 4000); }
       else if (m.t === "scroll") { lastScroll = m.y; hideChip(); }
@@ -70,10 +70,10 @@
     if (!editor || mode !== "edit" || !m.rect) return;
     chipPress = null; chipData = m; $("#askTxt").textContent = label; chip.classList.add("show");
     var fr = frame.getBoundingClientRect(), r = m.rect, cw = chip.offsetWidth, ch = chip.offsetHeight;
-    var top = fr.top + r.y + r.h + 8; if (top + ch > innerHeight - 8) top = fr.top + r.y - ch - 8;
+    var top = fr.top + r.y + r.h + 8; if (top + ch > fr.bottom - 8) top = fr.top + r.y - ch - 8;
     var left = fr.left + r.x + r.w / 2 - cw / 2;
-    chip.style.top = Math.max(fr.top + 4, Math.min(top, innerHeight - ch - 8)) + "px";
-    chip.style.left = Math.max(8, Math.min(left, innerWidth - cw - 8)) + "px";
+    chip.style.top = Math.max(fr.top + 4, Math.min(top, fr.bottom - ch - 8)) + "px";
+    chip.style.left = Math.max(fr.left + 8, Math.min(left, fr.right - cw - 8)) + "px";
   }
   function hideChip() { if (chip) chip.classList.remove("show"); chipData = null; }
   var chipPress = null;
@@ -743,6 +743,7 @@
     var drawer = $("#panel"), title = which === "history" ? "版本历史 History" : "评论 Comments";
     drawer.inert = false; drawer.setAttribute("aria-hidden", "false"); drawer.setAttribute("aria-label", title); drawer.dataset.surface = which;
     drawer.classList.add("show"); $("#ptitle").textContent = title;
+    document.body.classList.add("panel-open");
     document.body.classList.toggle("comments-open", which === "comments");
   }
   function openPanel(which, focusId) {
@@ -757,7 +758,7 @@
     commentOpenRequest++; panel = null; commentSelection = null;
     var drawer = $("#panel"), back = panelReturnFocus; panelReturnFocus = null;
     drawer.classList.remove("show"); drawer.inert = true; drawer.setAttribute("aria-hidden", "true");
-    document.body.classList.remove("comments-open");
+    document.body.classList.remove("panel-open", "comments-open");
     if (restoreFocus !== false && back && back.isConnected) {
       back.focus({ preventScroll: true });
       if (back === frame) send({ t: "commentFocus" });
@@ -782,7 +783,7 @@
   $("#cmReq").addEventListener("keydown", function (e) { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitComment(); });
   $("#pvClose").onclick = function () { $("#pvModal").classList.remove("show"); $("#pvFrame").srcdoc = ""; };
   document.addEventListener("keydown", function (e) { if (e.key === "Escape") { closePanel(); $("#cmModal").classList.remove("show"); $("#pvModal").classList.remove("show"); if (mode === "comment") setMode("edit"); hideChip(); } });
-  document.addEventListener("click", function (e) { if (panel === "comments" && !$("#panel").contains(e.target)) closePanel(); }, true);
+  document.addEventListener("click", function (e) { if (panel === "comments" && matchMedia("(max-width:640px)").matches && !$("#panel").contains(e.target)) closePanel(); }, true);
   window.addEventListener("resize", hideChip);
 
   /* ---------- init ---------- */
