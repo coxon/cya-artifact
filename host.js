@@ -47,10 +47,11 @@
       else if (m.t === "edits") doSave(m.edits || []);
       else if (m.t === "pick") { setMode("edit"); openCommentForm(m); }
       else if (m.t === "pin") openPanel("comments", m.id);
-      else if (m.t === "by") showByPop(m);
-      else if (m.t === "escape") { closeByPop(); hideChip(); if (mode === "comment") setMode("edit"); }
+      else if (m.t === "by") showComment(m);
+      else if (m.t === "outside") { if (panel === "comments") closePanel(false); }
+      else if (m.t === "escape") { closePanel(); hideChip(); if (mode === "comment") setMode("edit"); }
       else if (m.t === "located") { if (!m.ok) toast("页面上找不到这个位置了（可能已被改写）· Location not found", 4000); }
-      else if (m.t === "scroll") { lastScroll = m.y; hideChip(); closeByPop(); }
+      else if (m.t === "scroll") { lastScroll = m.y; hideChip(); }
       else if (m.t === "sel") { if (m.none) { if (Date.now() - chipAt > 500) hideChip(); } else showChip(m, "评论这里 · Request a change"); }
       else if (m.t === "noedit") { chipAt = Date.now(); showChip(m, "这里由程序生成 · 提交修改请求"); }
     }
@@ -67,7 +68,6 @@
   var chip = $("#askChip"), chipData = null, chipAt = 0;
   function showChip(m, label) {
     if (!editor || mode !== "edit" || !m.rect) return;
-    closeByPop();
     chipPress = null; chipData = m; $("#askTxt").textContent = label; chip.classList.add("show");
     var fr = frame.getBoundingClientRect(), r = m.rect, cw = chip.offsetWidth, ch = chip.offsetHeight;
     var top = fr.top + r.y + r.h + 8; if (top + ch > innerHeight - 8) top = fr.top + r.y - ch - 8;
@@ -580,17 +580,17 @@
       .catch(function (e) { toast("发送失败 " + e.message, 6000); })
       .then(function () { $("#cmSend").disabled = false; });
   }
-  var commentsRequest = 0, commentsPromise = null, commentsError = false, panelFocus = null, directSending = false;
+  var commentsRequest = 0, commentsPromise = null, commentsError = false, commentSelection = null, commentOpenRequest = 0, directSending = false;
   function loadComments() {
     var request = ++commentsRequest;
     commentsPromise = api("/comments").then(function (d) {
       if (request !== commentsRequest) return commentsPromise;
       commentsError = false; comments = d.comments || []; sendPins();
-      if (panel === "comments") renderComments(panelFocus);
+      if (panel === "comments") renderComments();
     }).catch(function () {
       if (request !== commentsRequest) return commentsPromise;
       commentsError = true;
-      if (panel === "comments") renderComments(panelFocus);
+      if (panel === "comments") renderComments();
     });
     return commentsPromise;
   }
@@ -611,60 +611,90 @@
     if (m.cid) return comments.find(function (c) { return c.id === m.cid; }) || null;
     return Number.isSafeInteger(m.n) && m.n > 0 ? comments[m.n - 1] || null : null;
   }
-  function locate(c, prefer) { closeByPop(); send({ t: "locate", selector: c ? c.selector : null, text: c ? c.snippet_text : null, cid: c ? c.id : null, n: c ? cnum(c) : null, prefer: prefer || "chip" }); }
-  var byRequest = 0;
-  function closeByPop() { byRequest++; var p = $("#byPop"); if (p) p.hidden = true; }
-  function showByPop(m) {
-    if (mode === "comment") return;
-    hideChip(); closeByPop(); var request = byRequest;
-    var txt = String(m.text || ""), by = (txt.match(/^\s*(.+?)\s*答(?:\s|·|$)/) || [])[1] || "";
-    m.n = commentNumber(txt);
-    var go = function () {
-      if (request !== byRequest) return;
-      var c = editor ? findComment(m) : null, p = $("#byPop"), h = '<button class="bx" id="bpX" aria-label="关闭评论卡片">×</button>';
-      if (c) {
-        h += '<div><span class="cmtag">评论 ' + cnum(c) + "</span> <span class=\"bm\">" + esc(ST[c.status] || c.status) + "</span></div>" +
-          '<div class="bq">' + esc(c.request) + "</div>" +
-          '<div class="cmn">提问 <b>' + esc(asker(c)) + '</b> <span class="bm">· ' + fmt(c.created) + "</span></div>" +
-          (answerer(c) ? '<div class="cmn">回答 <b>' + esc(answerer(c)) + '</b> <span class="bm">· ' + fmt(c.updated) + (c.resolved_version ? " · v" + c.resolved_version : "") + "</span></div>" : "") +
-          (c.selector || c.snippet_text ? '<div class="bm" style="margin-top:4px">评论处：' + esc((c.snippet_text || "").slice(0, 60) || "选中的元素") + "</div>" : '<div class="bm" style="margin-top:4px">评论处：整个页面</div>') +
-          '<div class="cmb">' + (c.selector || c.snippet_text ? '<button id="bpGo">跳到评论处 Locate</button>' : "") + (editor ? '<button id="bpAll">全部评论 All</button>' : "") + "</div>";
-      } else {
-        h += '<div><span class="cmtag">' + esc(m.n ? "评论 " + m.n : "评论") + "</span></div>" + (by ? '<div class="cmn">回答 <b>' + esc(by) + "</b></div>" : "") +
-          '<div class="bm" style="margin-top:6px">' + (editor ? (commentsError ? "评论加载失败，请重试 Could not load comments" : "没找到这条评论 Comment not found") : "评论内容只有用编辑链接打开才能看到 · Open with the editor link to see the comment") + "</div>" + (editor ? '<div class="cmb"><button id="bpAll">全部评论 All</button></div>' : "");
-      }
-      p.innerHTML = h; p.hidden = false;
-      var fr = frame.getBoundingClientRect(), r = m.rect || { x: 20, y: 20, w: 0, h: 0 }, pw = p.offsetWidth, ph = p.offsetHeight;
-      var left = Math.max(8, Math.min(fr.left + r.x, innerWidth - pw - 8)), top = fr.top + r.y + r.h + 8;
-      if (top + ph > innerHeight - 8) top = Math.max(fr.top + 8, fr.top + r.y - ph - 8);
-      top = Math.max(8, Math.min(top, innerHeight - ph - 8));
-      p.style.left = left + "px"; p.style.top = top + "px";
-      $("#bpX").onclick = closeByPop;
-      if ($("#bpGo")) $("#bpGo").onclick = function () { locate(c, "sel"); };
-      if ($("#bpAll")) $("#bpAll").onclick = function () { closeByPop(); openPanel("comments", c ? c.id : null); };
-    };
-    if (editor && !findComment(m)) loadComments().then(go, go); else go();
+  function locate(c, prefer) {
+    var m = { t: "locate", selector: c ? c.selector : null, text: c ? c.snippet_text : null,
+      cid: c ? c.id : commentSelection && commentSelection.cid, n: c ? cnum(c) : commentSelection && commentSelection.n,
+      whole: !!c && !c.selector && !c.snippet_text, prefer: prefer || "chip" };
+    send(m);
   }
-  function renderComments(focusId) {
-    var draft = $("#pgReq") ? $("#pgReq").value : "";
-    var h = '<div class="pgen"><textarea id="pgReq" placeholder="请求修改整个页面… Request a change to the whole page"></textarea><button class="pri" id="pgSend">发送 Send</button></div>';
-    if (commentsError) h += '<p class="empty">评论加载失败，请重新打开重试。</p>';
-    if (!comments.length && !commentsError) h += '<p class="empty">还没有评论。选择页面文字，再点「评论这里」。<br>No comments yet.</p>';
-    comments.slice().reverse().forEach(function (c) {
-      var num = c.status === "open" ? cnum(c) : "";
-      h += '<div class="cm ' + c.status + (c.id === focusId ? " focus" : "") + '" id="cm-' + esc(c.id) + '"><div class="cmh">' + (num ? '<span class="pinb">' + num + "</span>" : "") + '<span class="cmtag">评论 ' + cnum(c) + '</span><span class="st">' + ST[c.status] + "</span></div>" +
-        '<div class="cmr">' + esc(c.request) + "</div>" + (c.selector ? '<div class="cms">' + esc((c.snippet_text || "").slice(0, 120) || c.selector) + "</div>" : '<div class="cms">整个页面 Whole page</div>') +
-        '<div class="cmn">提问 <b>' + esc(asker(c)) + '</b> <span class="tm">· ' + fmt(c.created) + "</span></div>" +
-        (answerer(c) ? '<div class="cmn">回答 <b>' + esc(answerer(c)) + '</b> <span class="tm">· ' + fmt(c.updated) + (c.resolved_version ? " · v" + c.resolved_version : "") + "</span></div>" : "") +
-        (c.status === "failed" && c.reason ? '<div class="cms err">' + esc(c.reason) + "</div>" : "") +
-        '<div class="cmb">' + (c.status === "resolved" ? '<button data-loc="' + esc(c.id) + '" data-pf="chip">看回答 Answer</button>' : "") + (c.selector || c.snippet_text ? '<button data-loc="' + esc(c.id) + '" data-pf="sel">跳到评论处 Locate</button>' : "") + "</div></div>";
+  function people(c) {
+    return '<span class="cmn">提问 <b>' + esc(asker(c)) + '</b> <span class="tm">· ' + fmt(c.created) + "</span></span>" +
+      (answerer(c) ? '<span class="cmn">回答 <b>' + esc(answerer(c)) + '</b> <span class="tm">· ' + fmt(c.updated) + (c.resolved_version ? " · v" + c.resolved_version : "") + "</span></span>" : "");
+  }
+  function place(c) { return c.snippet_text || (c.selector ? "选中的元素" : "整个页面 Whole page"); }
+  function showComment(m) {
+    var txt = String(m.text || "");
+    openComments({ cid: m.cid, n: commentNumber(txt), by: (txt.match(/^\s*(.+?)\s*答(?:\s|·|$)/) || [])[1] || "" }, "chip");
+  }
+  function openComments(selection, prefer) {
+    if (mode === "comment") setMode("edit");
+    hideChip();
+    var request = ++commentOpenRequest;
+    commentSelection = selection || null;
+    showPanel("comments"); renderComments(true); $("#pclose").focus({ preventScroll: true });
+    var c = editor && commentSelection ? findComment(commentSelection) : null;
+    // A known selection locates immediately. Opening the list alone never moves the page.
+    if (c || (!editor && commentSelection && (commentSelection.cid || commentSelection.n))) locate(c, prefer);
+    if (editor) loadComments().then(function () {
+      if (request !== commentOpenRequest || panel !== "comments" || c || !commentSelection) return;
+      var found = findComment(commentSelection);
+      if (found) locate(found, prefer);
     });
-    $("#pbody").innerHTML = h;
-    $("#pgReq").value = draft;
-    $("#pgSend").disabled = directSending;
-    $("#pbody").querySelectorAll("[data-loc]").forEach(function (b) { b.onclick = function () { locate(findComment({ cid: b.dataset.loc }), b.dataset.pf); if (innerWidth <= 720) closePanel(); }; });
-    if (focusId) { var fe = document.getElementById("cm-" + focusId); if (fe) fe.scrollIntoView({ block: "nearest" }); }
-    $("#pgSend").onclick = function () { var v = $("#pgReq").value.trim(); if (!v) return; $("#pgSend").disabled = true; submitCommentDirect(v); };
+  }
+  function selectComment(id) {
+    var c = findComment({ cid: id }); if (!editor || !c) return;
+    commentOpenRequest++; commentSelection = { cid: c.id };
+    renderComments(true); $("#commentDetail").focus({ preventScroll: true }); locate(c, "sel");
+  }
+  function renderComments(resetScroll) {
+    var body = $("#pbody"), active = document.activeElement, focusId = body.contains(active) ? active.id : null;
+    var input = $("#pgReq"), draft = input ? input.value : "", start = input && input.selectionStart, end = input && input.selectionEnd;
+    var scroll = body.scrollTop, c = editor && commentSelection ? findComment(commentSelection) : null, h = "";
+    // Once resolved, use the stable ID even if subsequent reloads change the comment ordering.
+    if (c) commentSelection.cid = c.id;
+    if (commentSelection) {
+      h += '<section id="commentDetail" tabindex="-1" aria-label="选中的评论 Selected comment">';
+      if (c) {
+        h += '<div class="cmh"><span class="cmtag">评论 ' + cnum(c) + '</span><span class="st">' + esc(ST[c.status] || c.status) + '</span></div>' +
+          '<div class="cmr">' + esc(c.request) + '</div>' + people(c) +
+          '<div class="cms">评论处：' + esc(place(c)) + '</div>' +
+          (c.status === "failed" && c.reason ? '<div class="cms err">' + esc(c.reason) + '</div>' : '') +
+          '<div class="cmb"><button id="commentLocate">跳到评论处 Locate</button></div>';
+      } else {
+        h += '<div class="cmtag">' + esc(commentSelection.n ? "评论 " + commentSelection.n : "评论") + '</div>' +
+          (commentSelection.by ? '<div class="cmn">回答 <b>' + esc(commentSelection.by) + '</b></div>' : '') +
+          '<p class="cms">' + (editor ? (commentsError ? "评论加载失败，请重试 Could not load comments" : "没找到这条评论 Comment not found") : "评论内容只有用编辑链接打开才能看到 · Open with the editor link to see the comment") + '</p>';
+      }
+      h += '</section>';
+    }
+    // Public chips are the only source of viewer metadata. Never render the private list or composer.
+    if (editor) {
+      h += '<div class="pgen"><textarea id="pgReq" aria-label="请求修改整个页面 Request a change to the whole page" placeholder="请求修改整个页面… Request a change to the whole page"></textarea><button class="pri" id="pgSend">发送 Send</button></div>';
+      h += '<section id="commentList" aria-label="全部评论 All comments">';
+      if (commentsError) h += '<p class="empty">评论加载失败，请重新打开重试。</p>';
+      if (!comments.length && !commentsError) h += '<p class="empty">还没有评论。选择页面文字，再点「评论这里」。<br>No comments yet.</p>';
+      comments.slice().reverse().forEach(function (item) {
+        var selected = c && c.id === item.id;
+        h += '<button type="button" class="cm ' + esc(item.status) + (selected ? ' focus' : '') + '" id="cm-' + esc(item.id) + '" data-comment="' + esc(item.id) + '"' + (selected ? ' aria-current="true"' : '') + '>' +
+          '<span class="cmh">' + (item.status === "open" ? '<span class="pinb">' + cnum(item) + '</span>' : '') + '<span class="cmtag">评论 ' + cnum(item) + '</span><span class="st">' + esc(ST[item.status] || item.status) + '</span></span>' +
+          '<span class="cmr">' + esc(item.request) + '</span><span class="cms">' + esc(place(item)) + '</span>' +
+          people(item) +
+          (item.status === "failed" && item.reason ? '<span class="cms err">' + esc(item.reason) + '</span>' : '') + '</button>';
+      });
+      h += '</section>';
+    }
+    body.innerHTML = h;
+    if ($("#commentLocate")) $("#commentLocate").onclick = function () { locate(c, "sel"); };
+    body.querySelectorAll("[data-comment]").forEach(function (b) { b.onclick = function () { selectComment(b.dataset.comment); }; });
+    if ($("#pgReq")) {
+      $("#pgReq").value = draft; $("#pgSend").disabled = directSending;
+      $("#pgSend").onclick = function () { var v = $("#pgReq").value.trim(); if (!v) return; $("#pgSend").disabled = true; submitCommentDirect(v); };
+    }
+    if (!resetScroll && focusId) {
+      var next = document.getElementById(focusId) || $("#pclose"); next.focus({ preventScroll: true });
+      if (focusId === "pgReq" && $("#pgReq")) $("#pgReq").setSelectionRange(start, end);
+    }
+    body.scrollTop = resetScroll ? 0 : scroll;
   }
   function submitCommentDirect(v) {
     if (directSending) return;
@@ -706,14 +736,33 @@
   }
 
   /* ---------- panel / menu ---------- */
+  var panelReturnFocus = null;
+  function showPanel(which) {
+    if (!panel || document.activeElement === frame) panelReturnFocus = document.activeElement;
+    panel = which;
+    var drawer = $("#panel"), title = which === "history" ? "版本历史 History" : "评论 Comments";
+    drawer.inert = false; drawer.setAttribute("aria-hidden", "false"); drawer.setAttribute("aria-label", title); drawer.dataset.surface = which;
+    drawer.classList.add("show"); $("#ptitle").textContent = title;
+    document.body.classList.toggle("comments-open", which === "comments");
+  }
   function openPanel(which, focusId) {
     if (!editor) return;
-    if (panel === which && which === "history" && !focusId) { closePanel(); return; }
-    closeByPop(); panelFocus = focusId || null;
-    panel = which; $("#panel").classList.add("show"); $("#ptitle").textContent = which === "history" ? "版本历史 History" : "评论 Comments";
-    if (which === "history") loadHistory(); else { renderComments(panelFocus); loadComments(); }
+    if (which === "comments") { openComments(focusId ? { cid: focusId } : null, "sel"); return; }
+    if (panel === "history") { closePanel(); return; }
+    commentOpenRequest++; commentSelection = null;
+    showPanel("history"); loadHistory(); $("#pclose").focus({ preventScroll: true });
   }
-  function closePanel() { panel = null; panelFocus = null; $("#panel").classList.remove("show"); }
+  function closePanel(restoreFocus) {
+    if (!panel) return;
+    commentOpenRequest++; panel = null; commentSelection = null;
+    var drawer = $("#panel"), back = panelReturnFocus; panelReturnFocus = null;
+    drawer.classList.remove("show"); drawer.inert = true; drawer.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("comments-open");
+    if (restoreFocus !== false && back && back.isConnected) {
+      back.focus({ preventScroll: true });
+      if (back === frame) send({ t: "commentFocus" });
+    }
+  }
   function copy(text, label) { (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(function () { toast("已复制 " + label + " Copied"); }, function () { prompt(label, text); }); }
   function shareLink() {
     return location.origin + "/a/" + B.id;
@@ -732,8 +781,9 @@
   $("#cmSend").onclick = submitComment; $("#cmCancel").onclick = function () { $("#cmModal").classList.remove("show"); };
   $("#cmReq").addEventListener("keydown", function (e) { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitComment(); });
   $("#pvClose").onclick = function () { $("#pvModal").classList.remove("show"); $("#pvFrame").srcdoc = ""; };
-  document.addEventListener("keydown", function (e) { if (e.key === "Escape") { closeByPop(); $("#cmModal").classList.remove("show"); $("#pvModal").classList.remove("show"); if (mode === "comment") setMode("edit"); hideChip(); } });
-  window.addEventListener("resize", function () { closeByPop(); hideChip(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") { closePanel(); $("#cmModal").classList.remove("show"); $("#pvModal").classList.remove("show"); if (mode === "comment") setMode("edit"); hideChip(); } });
+  document.addEventListener("click", function (e) { if (panel === "comments" && !$("#panel").contains(e.target)) closePanel(); }, true);
+  window.addEventListener("resize", hideChip);
 
   /* ---------- init ---------- */
   if (token) {

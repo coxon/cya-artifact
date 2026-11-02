@@ -4,7 +4,7 @@
   if (window.parent === window || window.__AE_BRIDGE__) return;
   window.__AE_BRIDGE__ = 1;
   var P = window.parent, mode = null, orig = new WeakMap(), dirty = new Set(), nodeKey = new WeakMap(), keys = new Map(), nextKey = 1, sent = {};
-  var editables = [], root = null, sh = null, hl = null, pinsBox = null, pins = [], styleEl = null, allowed = null;
+  var editables = [], root = null, sh = null, hl = null, pinsBox = null, pins = [], styleEl = null, allowed = null, commentTrigger = null;
   var SKIP = /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|TEXTAREA|TITLE|SVG|SELECT|OPTION|CODE|PRE)$/;
   // answer signature chips (.by) open their comment; keep them clickable, never editable
   (function () { var st = document.createElement("style"); st.setAttribute("data-artifact-by", ""); st.textContent = ".by{cursor:pointer}.by:hover{filter:brightness(.96)}"; (document.head || document.documentElement).appendChild(st); })();
@@ -119,7 +119,9 @@
       if (!el) return; var r = el.getBoundingClientRect(); if (!r.width && !r.height) return;
       var d = document.createElement("div"); d.className = "pin"; d.textContent = p.n; d.title = p.request || "";
       d.style.left = Math.max(2, Math.min(r.right + scrollX - 14, scrollX + document.documentElement.clientWidth - 26)) + "px"; d.style.top = Math.max(2, r.top + scrollY - 12) + "px";
-      d.onclick = function (e) { e.stopPropagation(); post({ t: "pin", id: p.id }); };
+      d.onclick = function (e) { e.stopPropagation(); commentTrigger = { el: d, pin: p.id }; post({ t: "pin", id: p.id }); };
+      d.dataset.comment = p.id; d.tabIndex = 0; d.setAttribute("role", "button"); d.setAttribute("aria-label", "评论 " + p.n);
+      d.onkeydown = function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); d.click(); } };
       pinsBox.appendChild(d);
     });
   }
@@ -137,12 +139,16 @@
   document.addEventListener("keydown", function (e) { if (mode === "edit" && e.key === "Enter" && e.target.isContentEditable && e.target.closest("[data-ae-ed]")) e.preventDefault(); }, true);
   document.addEventListener("click", function (e) {
     var by = e.target && e.target.closest && e.target.closest(".by");
-    if (by && mode !== "comment" && !(root && e.composedPath && e.composedPath().indexOf(root) >= 0)) {
+    if (by && !(root && e.composedPath && e.composedPath().indexOf(root) >= 0)) {
       e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+      commentTrigger = { el: by, cid: (by.getAttribute("data-cid") || "").trim(), n: commentNumber(by.textContent) };
       post({ t: "by", cid: (by.getAttribute("data-cid") || "").trim() || null, text: (by.textContent || "").trim().slice(0, 200), rect: rectOf(by.getBoundingClientRect()) });
       return;
     }
-    if (!mode || (root && e.composedPath && e.composedPath().indexOf(root) >= 0)) return;
+    if (root && e.composedPath && e.composedPath().indexOf(root) >= 0) return;
+    // The host cannot observe clicks in the sandboxed page, including read-only viewers.
+    post({ t: "outside" });
+    if (!mode) return;
     var el = e.target.nodeType === 1 ? e.target : e.target.parentElement; if (!el) return;
     if (mode === "edit") return; // app controls work normally
     e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
@@ -188,6 +194,7 @@
     else if (m.t === "pins") { pins = m.pins || []; ensureRoot(); renderPins(); }
     else if (m.t === "scroll") scrollTo(0, m.y || 0);
     else if (m.t === "locate") locate(m);
+    else if (m.t === "commentFocus") restoreCommentFocus();
     else if (m.t === "print") print();
   });
   /* jump to a comment's place: "sel" = the commented element (selector, else its text), "chip" = the answer's signature chip */
@@ -225,14 +232,30 @@
     return el;
   }
   function blockOf(el) { return (el.closest && el.closest("p,li,td,th,blockquote,h1,h2,h3,h4,figure,section")) || el; }
+  function restoreCommentFocus() {
+    if (!commentTrigger) return;
+    var el = commentTrigger.el;
+    if (!el || !el.isConnected) {
+      el = commentTrigger.pin && pinsBox ? Array.from(pinsBox.children).find(function (p) { return p.dataset.comment === commentTrigger.pin; }) : findChip(commentTrigger);
+    }
+    if (!el) return;
+    var tab = el.getAttribute("tabindex"); el.setAttribute("tabindex", "-1");
+    el.focus({ preventScroll: true });
+    // Removing tabindex immediately blurs non-focusable signature spans in Chromium.
+    if (tab === null) el.addEventListener("blur", function () { el.removeAttribute("tabindex"); }, { once: true });
+    else el.setAttribute("tabindex", tab);
+  }
   var flT = 0, flStartT = 0, flashTarget = null;
   function locate(m) {
-    var chip = null, el = m.prefer === "sel" ? findSel(m) : ((chip = findChip(m)) && blockOf(chip));
-    if (!el) el = m.prefer === "sel" ? ((chip = findChip(m)) && blockOf(chip)) : findSel(m);
+    var chip = null, el = m.prefer === "sel" ? (m.whole ? document.body : findSel(m)) : ((chip = findChip(m)) && blockOf(chip));
+    if (!el) el = m.prefer === "sel" ? ((chip = findChip(m)) && blockOf(chip)) : (m.whole ? document.body : findSel(m));
     clearTimeout(flT); clearTimeout(flStartT); flashTarget = null;
     if (sh) sh.getElementById("fl").style.display = "none";
     if (!el) { post({ t: "located", ok: false }); return; }
-    try { el.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) { el.scrollIntoView(); }
+    if (el === document.body && m.whole) scrollTo({ top: 0, behavior: "smooth" });
+    else {
+      try { el.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) { el.scrollIntoView(); }
+    }
     ensureRoot(); var fl = sh.getElementById("fl");
     flStartT = setTimeout(function () {
       if (!el.isConnected || !visible(el)) return;

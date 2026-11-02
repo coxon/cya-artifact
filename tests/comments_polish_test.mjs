@@ -41,6 +41,7 @@ async function api(route, body, auth = "admin", expected = 200) {
 }
 const request1 = "请把第一处说明写清楚，保留原来的定位。";
 const request2 = "请补充第二处结论，并由编辑者署名。";
+const request3 = "请检查整个页面的说明是否完整。";
 const text1 = "第一处评论目标：这段说明需要保留原来的位置。";
 const text2 = "第二处评论目标跨越行内标签，仍然应该准确定位。";
 function fixture(signatures = true) {
@@ -90,11 +91,45 @@ async function overlayState(cdp) {
   return Object.fromEntries(computedStyle.map(({ name, value }) => [name, value]));
 }
 async function clickSignature(page, frame, selector) {
+  if (await page.locator("#panel.show").count()) await closeDrawer(page);
   await frame.locator(selector).scrollIntoViewIfNeeded();
-  // Let the iframe's debounced scroll event finish before opening the popover.
+  // Let the iframe's debounced scroll event finish before opening the drawer.
   await page.waitForTimeout(220);
   await frame.locator(selector).click();
-  await page.locator("#byPop").waitFor({ state: "visible" });
+  await page.locator("#panel.show").waitFor({ state: "visible" });
+  await page.waitForTimeout(220);
+}
+async function closeDrawer(page, method = "button") {
+  if (method === "escape") await page.keyboard.press("Escape");
+  else await page.locator("#pclose").click();
+  await page.locator("#panel").waitFor({ state: "hidden" });
+}
+async function assertHighlight(frame, cdp, target, label) {
+  await until(async () => {
+    const s = await overlayState(cdp);
+    const r = await frame.locator(target).evaluate(el => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: innerHeight, scrollY }; });
+    const page = frame.page();
+    let visibleHeight = r.height;
+    if (page.viewportSize().width <= 640 && await page.locator("#panel.show").count()) {
+      const drawer = await page.locator("#panel").boundingBox(), iframe = await page.locator("#frame").boundingBox();
+      visibleHeight = Math.min(visibleHeight, drawer.y - iframe.y);
+    }
+    return s && s.display !== "none" && +s.opacity > 0 && r.top >= 0 && r.bottom <= visibleHeight && Math.abs(parseFloat(s.top) - (r.top + r.scrollY - 3)) < 2;
+  }, label);
+  check(true, label);
+}
+async function assertDrawerLayout(page, width, label) {
+  await assertFits(page, "#panel", label + ": drawer fits viewport");
+  const rect = await page.locator("#panel").boundingBox(), { height } = page.viewportSize();
+  if (width > 640) check(rect.width >= 360 && rect.width <= 420 && Math.abs(rect.x + rect.width - width) <= 1 && Math.abs(rect.y - 44) <= 1 && Math.abs(rect.y + rect.height - height) <= 1, label + ": full-height right drawer sits below top bar");
+  else {
+    const radius = await page.locator("#panel").evaluate(el => parseFloat(getComputedStyle(el).borderTopLeftRadius));
+    check(Math.abs(rect.x) <= 1 && Math.abs(rect.width - width) <= 1 && Math.abs(rect.y + rect.height - height) <= 1 && rect.height / height > .65 && rect.height / height < .78 && radius > 0, label + ": rounded bottom sheet uses about 72% height");
+  }
+}
+async function screenshot(page, filename) {
+  const shot = path.join(shotsDir, filename);
+  await page.screenshot({ path: shot }); results.screenshots.push(path.relative(process.cwd(), shot));
 }
 async function assertFits(page, selector, label) {
   const rect = await page.locator(selector).boundingBox();
@@ -143,7 +178,7 @@ try {
   const iframeRect = await pending.locator("#frame").boundingBox();
   await pending.mouse.click(iframeRect.x + pinResult.value.x, iframeRect.y + pinResult.value.y);
   await pending.locator(`#cm-${c2.comment_id}.focus`).waitFor();
-  check((await pending.locator(`#cm-${c2.comment_id} .pinb`).innerText()) === "2", "clicking pending marker opens matching comment panel with global numbering");
+  check((await pending.locator(`#cm-${c2.comment_id} .pinb`).innerText()) === "2", "clicking pending marker opens matching drawer selection with global numbering");
   check(pendingErrors.length === 0, "pending marker flow has no browser errors");
   await pendingContext.close();
   const v2 = await api(`/api/admin/jobs/${c2.job_id}/publish`, { html: fixture(), base_version: v1.version, author: "  Cya.Editor  ", note: "Editor answer" });
@@ -173,10 +208,11 @@ try {
   check((await api(`/api/admin/artifacts/${id}/html`)).version === longAuthor.version, "stale publish returns 409 and leaves current version unchanged");
   await api(`/api/a/${id}/comments`, undefined, null, 403);
   check(true, "viewer comment API is forbidden");
+  const c3 = await api(`/api/a/${id}/comments`, { request: request3, selector: null }, editToken);
 
   for (const width of [1280, 390]) {
     const prefix = `${width}px`;
-    const context = await browser.newContext({ viewport: { width, height: width === 1280 ? 900 : 844 }, ...(width === 390 ? { isMobile: true, hasTouch: true, deviceScaleFactor: 1 } : {}) });
+    const context = await browser.newContext({ viewport: { width, height: width === 1280 ? 850 : 844 }, ...(width === 390 ? { isMobile: true, hasTouch: true, deviceScaleFactor: 1 } : {}) });
     await context.route("**/*", route => {
       const url = new URL(route.request().url());
       return url.origin === base || ["data:", "blob:"].includes(url.protocol) ? route.continue() : route.abort();
@@ -195,67 +231,108 @@ try {
     check(await frame.locator("#sig1").getAttribute("data-cid") === c1.comment_id && await frame.locator("#sig2").getAttribute("data-cid") === c2.comment_id, `${prefix}: served signatures are bound to comment IDs`);
     check(await frame.locator(".by").evaluateAll(nodes => nodes.every(n => !n.isContentEditable)), `${prefix}: signatures are not editable`);
 
-    for (const [sig, request, asker, answerer, cid] of [["#sig1", request1, "Editor", "Cya", c1.comment_id], ["#sig2", request2, "审阅者", "Cya.Editor", c2.comment_id]]) {
+    const fixtureComments = (await api(`/api/a/${id}/comments`, undefined, editToken)).comments;
+    for (const [sig, request, asker, answerer, cid, num, version] of [["#sig1", request1, "Editor", "Cya", c1.comment_id, 1, v1.version], ["#sig2", request2, "审阅者", "Cya.Editor", c2.comment_id, 2, v2.version]]) {
       await clickSignature(page, frame, sig);
-      const popup = await page.locator("#byPop").innerText();
-      check(popup.includes(request) && popup.includes(asker) && popup.includes(answerer) && /v\d+/.test(popup) && /\d{1,2}[/-]\d{1,2}/.test(popup) && /已完成/.test(popup), `${prefix}: ${answerer} popup shows correct request, people, time, status and version`);
-      await assertFits(page, "#byPop", `${prefix}: ${answerer} popup stays inside viewport`);
+      const detail = await page.locator("#commentDetail").innerText();
+      check(detail.includes(`评论 ${num}`) && detail.includes(request) && detail.includes(`提问 ${asker}`) && detail.includes(`回答 ${answerer}`) && detail.includes(` · v${version}`) && /\d{1,2}[/-]\d{1,2}/.test(detail) && detail.includes("已完成"), `${prefix}: ${answerer} detail shows correct number, question, asker, answerer, time, status and version`);
+      check(detail.includes(num === 1 ? text1 : text2), `${prefix}: selected detail includes the original snippet`);
+      await assertDrawerLayout(page, width, prefix);
+      check(await page.locator("#panel").getAttribute("role") === "dialog" && !!await page.locator("#panel").getAttribute("aria-label"), `${prefix}: drawer has dialog role and accessible label`);
+      check(await page.locator("#panel").evaluate(el => el.contains(document.activeElement)), `${prefix}: focus moves into drawer on open`);
       check(!await frame.locator(sig).evaluate(el => el.isContentEditable), `${prefix}: clicking ${answerer} keeps signature locked`);
-      if (sig === "#sig2") {
-        const shot = path.join(shotsDir, `comments-${width}.png`);
-        await page.screenshot({ path: shot });
-        results.screenshots.push(path.relative(process.cwd(), shot));
-      }
-      await page.locator("#bpAll").click();
-      await page.locator(`#cm-${cid}.focus`).waitFor();
-      const panelText = await page.locator("#pbody").innerText();
-      check(panelText.includes("Editor") && panelText.includes("审阅者") && panelText.includes("Cya.Editor"), `${prefix}: comments panel displays both askers and answerers`);
-      await page.locator("#pclose").click();
+      await page.locator(`#cm-${cid}.focus[aria-current=true]`).waitFor();
+      const listIds = await page.locator("#commentList .cm").evaluateAll(rows => rows.map(row => row.dataset.comment));
+      check(JSON.stringify(listIds) === JSON.stringify(fixtureComments.map(c => c.id).reverse()), `${prefix}: complete comment list is newest first with selected entry marked`);
+      check((await page.locator("#commentList").innerText()).includes(request3), `${prefix}: full list includes the pending comment`);
+      await assertHighlight(frame, cdp, `${sig} >> xpath=..`, `${prefix}: chip selection immediately highlights its answer`);
+      check(!/\u{1F4CC}/u.test(await page.locator("body").innerText()) && !/\u{1F4CC}/u.test(await frame.locator("body").innerText()), `${prefix}: no pushpin glyph is visible`);
+      if (sig === "#sig1") await screenshot(page, `drawer-${width}.png`);
+      await closeDrawer(page);
+      check(await page.evaluate(() => document.activeElement === document.querySelector("#frame")), `${prefix}: close button restores focus to page iframe`);
+      await frame.waitForFunction(selector => document.activeElement === document.querySelector(selector), sig);
+      check(true, `${prefix}: close button restores focus to the opening chip`);
     }
-    await clickSignature(page, frame, "#sig2");
-    await page.keyboard.press("Escape");
-    await page.locator("#byPop").waitFor({ state: "hidden" });
-    check(true, `${prefix}: Escape with iframe focus closes comment popup`);
+    // Selecting a list entry updates the detail and locates the original comment spot.
+    await clickSignature(page, frame, "#sig1");
+    await page.locator(`[data-comment="${c2.comment_id}"]`).click();
+    await page.locator(`#cm-${c2.comment_id}.focus[aria-current=true]`).waitFor();
+    check((await page.locator("#commentDetail").innerText()).includes(request2) && !(await page.locator("#commentDetail").innerText()).includes(request1), `${prefix}: list click switches selected detail`);
+    await assertHighlight(frame, cdp, "#target2", `${prefix}: list selection locates and highlights its original comment spot`);
+    check(await page.locator("#panel.show").isVisible(), `${prefix}: locate leaves drawer open`);
+    await page.locator("#pbody").evaluate(el => { el.scrollTop = 0; });
+    if (width === 1280) await screenshot(page, "drawer-1280-switched.png");
+    // A real comments broadcast refreshes the selected detail and preserves a draft.
+    await page.locator("#pgReq").fill("保留尚未发送的整页修改请求。");
+    await api(`/api/admin/artifacts/${id}/comments/${c2.comment_id}`, { resolved_by: "Updated answerer" });
+    await until(async () => (await page.locator("#commentDetail").innerText()).includes("Updated answerer"), `${prefix}: comments websocket refreshes selected detail`);
+    check(await page.locator(`#cm-${c2.comment_id}.focus[aria-current=true]`).count() === 1 && await page.locator("#pgReq").inputValue() === "保留尚未发送的整页修改请求。", `${prefix}: live reload retains selection and unsent draft`);
+    check(await page.locator("#pgReq").evaluate(el => el === document.activeElement && el.selectionStart === el.value.length), `${prefix}: live reload preserves composer focus and caret`);
+    await api(`/api/admin/artifacts/${id}/comments/${c2.comment_id}`, { resolved_by: "Cya.Editor" });
+    await until(async () => (await page.locator("#commentDetail").innerText()).includes("Cya.Editor"), `${prefix}: restored answerer appears live`);
+    await page.locator("#pgReq").fill("");
+    await closeDrawer(page, "escape");
+    check(await page.evaluate(() => document.activeElement === document.querySelector("#frame")), `${prefix}: Escape closes drawer and restores iframe focus`);
+    await frame.waitForFunction(() => document.activeElement === document.querySelector("#sig1"));
+    check(true, `${prefix}: Escape restores focus to the chip that opened the drawer`);
     await clickSignature(page, frame, "#sig2");
     await frame.evaluate(() => scrollBy(0, 100));
-    await page.locator("#byPop").waitFor({ state: "hidden" });
-    check(true, `${prefix}: iframe scrolling closes comment popup`);
+    await page.waitForTimeout(350);
+    check(await page.locator("#panel.show").isVisible(), `${prefix}: iframe scrolling keeps drawer open`);
+    // The top bar is outside; it stays usable while the drawer is open.
+    await page.locator("#bar").click({ position: { x: 2, y: 2 } });
+    await page.locator("#panel").waitFor({ state: "hidden" });
+    check(true, `${prefix}: host outside click closes drawer`);
+    await clickSignature(page, frame, "#sig2");
+    await frame.evaluate(() => scrollTo(0, 0));
+    await page.waitForTimeout(250);
+    await frame.locator("h1").click({ position: { x: 8, y: 8 } });
+    await page.locator("#panel").waitFor({ state: "hidden" });
+    check(true, `${prefix}: iframe outside click closes drawer`);
+    // Chip clicks while a drawer is already open switch selection instead of dismissing it.
+    await clickSignature(page, frame, "#sig1");
+    await frame.locator("#sig2").evaluate(el => scrollTo(0, el.getBoundingClientRect().top + scrollY - 60));
+    await page.waitForTimeout(250);
+    await frame.locator("#sig2").click();
+    await page.locator(`#cm-${c2.comment_id}.focus`).waitFor();
+    check((await page.locator("#commentDetail").innerText()).includes(request2), `${prefix}: a second chip switches the open drawer`);
     for (const [sig, target] of [["#sig1", "#target1"], ["#sig2", "#target2"]]) {
       await clickSignature(page, frame, sig);
       const before = await frame.evaluate(() => scrollY);
-      await page.locator("#bpGo").click();
-      await until(async () => {
-        const s = await overlayState(cdp);
-        const r = await frame.locator(target).evaluate(el => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: innerHeight, scrollY }; });
-        // Wait for the requested target, not a previous highlight whose postMessage has yet to clear.
-        return s && s.display !== "none" && +s.opacity > 0 && r.scrollY > before + 500 && r.top >= 0 && r.bottom <= r.height && Math.abs(parseFloat(s.top) - (r.top + r.scrollY - 3)) < 2;
-      }, `${prefix}: requested target must scroll into view with its own highlight`);
-      const targetRect = await frame.locator(target).evaluate(el => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: innerHeight, scrollY }; });
-      check(targetRect.scrollY > before + 500 && targetRect.top >= 0 && targetRect.bottom <= targetRect.height, `${prefix}: ${target} scrolls into view with visible highlight`);
-      if (target === "#target2") {
-        const shot = path.join(shotsDir, `locate-${width}.png`);
-        await page.screenshot({ path: shot }); results.screenshots.push(path.relative(process.cwd(), shot));
-      }
+      await page.locator("#commentLocate").click();
+      await assertHighlight(frame, cdp, target, `${prefix}: Locate button scrolls to original target and flashes highlight`);
+      check((await frame.evaluate(() => scrollY)) > before + 500 && await page.locator("#panel.show").isVisible(), `${prefix}: Locate jumps to original text without closing drawer`);
+    }
+    await page.locator(`[data-comment="${c3.comment_id}"]`).click();
+    check((await page.locator("#commentDetail").innerText()).includes("整个页面 Whole page") && (await page.locator("#commentDetail").innerText()).includes("待处理"), `${prefix}: whole-page pending comment shows its scope and status`);
+    if (width === 1280) {
+      const wholeRequest = "请统一整个页面的段落间距。";
+      await page.locator("#pgReq").fill(wholeRequest);
+      await page.locator("#pgSend").click();
+      await until(async () => (await page.locator("#commentList").innerText()).includes(wholeRequest), `${prefix}: whole-page Send adds a comment to the drawer`);
+      const sent = (await api(`/api/a/${id}/comments`, undefined, editToken)).comments.find(c => c.request === wholeRequest);
+      check(sent && sent.selector === null && sent.status === "open", `${prefix}: whole-page composer preserves the comment API behavior`);
+      check(await page.locator("#pgReq").inputValue() === "", `${prefix}: successful Send clears the submitted draft`);
     }
     // A stale number must never override an explicit stable ID.
     await frame.locator("#sig1").evaluate(el => { el.textContent = "Cya 答 · 评论 2 · 11/2 10:00"; });
     await clickSignature(page, frame, "#sig1");
-    check((await page.locator("#byPop").innerText()).includes(request1), `${prefix}: data-cid wins over a conflicting comment number`);
-    await page.locator("#bpX").click();
+    check((await page.locator("#commentDetail").innerText()).includes(request1), `${prefix}: data-cid wins over a conflicting comment number`);
+    await closeDrawer(page);
     // Simulate legacy stored HTML or a client-generated label, without altering persisted source.
     await frame.locator("#sig2").evaluate(el => el.removeAttribute("data-cid"));
     await clickSignature(page, frame, "#sig2");
-    check((await page.locator("#byPop").innerText()).includes(request2), `${prefix}: legacy label falls back to comment number`);
-    await page.locator("#bpX").click();
+    check((await page.locator("#commentDetail").innerText()).includes(request2), `${prefix}: legacy label falls back to comment number`);
+    await closeDrawer(page);
     await frame.locator("#sig2").evaluate(el => { el.dataset.cid = "missing-comment-id"; });
     await clickSignature(page, frame, "#sig2");
-    check(/没找到|未找到/.test(await page.locator("#byPop").innerText()), `${prefix}: unknown explicit data-cid cannot open another comment`);
-    await page.locator("#bpX").click();
+    check(/没找到|未找到/.test(await page.locator("#commentDetail").innerText()), `${prefix}: unknown explicit data-cid cannot open another comment`);
+    await closeDrawer(page);
     for (const label of ["评论未知", "评论 1 / 评论 2", "评论 1.5", "评论 0", "评论 1abc", "评论 1e2"]) {
       await frame.locator("#sig2").evaluate((el, label) => { el.removeAttribute("data-cid"); el.textContent = "Cya.Editor 答 · " + label; }, label);
       await clickSignature(page, frame, "#sig2");
-      check(/没找到|未找到/.test(await page.locator("#byPop").innerText()), `${prefix}: invalid label ${label} fails gracefully`);
-      await page.locator("#bpX").click();
+      check(/没找到|未找到/.test(await page.locator("#commentDetail").innerText()), `${prefix}: invalid label ${label} fails gracefully`);
+      await closeDrawer(page);
     }
     // Delay an uncached lookup, then dismiss before it completes. The response must not reopen it.
     await frame.locator("#sig2").scrollIntoViewIfNeeded(); await page.waitForTimeout(220);
@@ -266,11 +343,29 @@ try {
     await context.route(commentsUrl, delayLookup);
     await frame.locator("#sig2").click();
     await until(() => lookupBegan, `${prefix}: delayed comment lookup starts`);
-    await page.keyboard.press("Escape");
+    await closeDrawer(page, "escape");
     const lookupResponse = page.waitForResponse(response => response.url() === commentsUrl);
-    releaseLookup(); await lookupResponse; await page.waitForTimeout(150);
-    check(!await page.locator("#byPop").isVisible(), `${prefix}: dismissed async comment lookup cannot reopen popup`);
+    releaseLookup(); await (await lookupResponse).finished();
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    check(await page.locator("#panel.show").count() === 0 && !await page.locator("#panel").isVisible(), `${prefix}: dismissed async comment lookup cannot reopen drawer`);
     await context.unroute(commentsUrl, delayLookup);
+    // A delayed unknown chip must also not replace a newer valid selection.
+    let releaseStale, staleBegan = false;
+    const staleGate = new Promise(resolve => { releaseStale = resolve; });
+    const delayStale = async route => { if (!staleBegan) { staleBegan = true; await staleGate; } await route.continue(); };
+    await context.route(commentsUrl, delayStale);
+    await frame.locator("#sig2").scrollIntoViewIfNeeded();
+    await frame.locator("#sig2").click();
+    await until(() => staleBegan, `${prefix}: stale lookup begins`);
+    await frame.locator("#sig1").evaluate(el => scrollTo(0, el.getBoundingClientRect().top + scrollY - 60));
+    await page.waitForTimeout(250);
+    await frame.locator("#sig1").click();
+    await page.locator(`#cm-${c1.comment_id}.focus`).waitFor();
+    const staleResponse = page.waitForResponse(response => response.url() === commentsUrl);
+    releaseStale(); await (await staleResponse).finished();
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    check((await page.locator("#commentDetail").innerText()).includes(request1) && await page.locator(`#cm-${c1.comment_id}.focus`).count() === 1, `${prefix}: stale lookup cannot overwrite newer chip selection`);
+    await context.unroute(commentsUrl, delayStale);
     // Reload removes DOM-only fixture mutations and restores editable static text.
     await page.reload(); frame = await frameOf(page);
     await frame.waitForFunction(() => document.querySelector("#selection").isContentEditable);
@@ -299,7 +394,7 @@ try {
     results.browserErrors.push(...errors);
     await context.close();
 
-    const viewerContext = await browser.newContext({ viewport: { width, height: width === 1280 ? 900 : 844 } });
+    const viewerContext = await browser.newContext({ viewport: { width, height: width === 1280 ? 850 : 844 } });
     await viewerContext.route("**/*", route => new URL(route.request().url()).origin === base ? route.continue() : route.abort());
     const viewer = await viewerContext.newPage(), viewerErrors = [];
     let viewerCommentRequests = 0;
@@ -308,9 +403,11 @@ try {
     await viewer.goto(`${base}/a/${id}`); const viewerFrame = await frameOf(viewer);
     check(!await viewer.evaluate(() => document.body.classList.contains("is-editor")) && await viewerFrame.evaluate(() => !document.querySelector("[contenteditable]")), `${prefix}: fresh viewer has no editor role or editable elements`);
     await clickSignature(viewer, viewerFrame, "#sig2");
-    const viewerText = await viewer.locator("#byPop").innerText();
-    check(viewerText.includes("Cya.Editor") && viewerText.includes("编辑链接") && !viewerText.includes(request2), `${prefix}: viewer sees author and permission hint without private comment`);
-    await assertFits(viewer, "#byPop", `${prefix}: viewer popup stays inside viewport`);
+    const viewerText = await viewer.locator("#commentDetail").innerText();
+    check(viewerText.includes("评论 2") && viewerText.includes("Cya.Editor") && viewerText.includes("评论内容只有用编辑链接打开才能看到 · Open with the editor link to see the comment") && ![request1, request2, request3, text1, text2, "审阅者"].some(text => viewerText.includes(text)), `${prefix}: viewer sees only chip number, answerer and permission hint`);
+    check(await viewer.locator("#commentList, #pgReq, #pgSend").count() === 0, `${prefix}: viewer drawer has no comment list or composer`);
+    await assertDrawerLayout(viewer, width, `${prefix} viewer`);
+    if (width === 390) await screenshot(viewer, "drawer-viewer-390.png");
     check(viewerCommentRequests === 0, `${prefix}: viewer never requests private comment API`);
     check(await viewer.locator("#bComments").count() === 0 && viewerErrors.length === 0, `${prefix}: viewer has no toolbar button or browser errors`);
     results.browserErrors.push(...viewerErrors); await viewerContext.close();
@@ -326,7 +423,7 @@ try {
   await invalid.waitForFunction(() => document.querySelector("#toast").textContent.includes("编辑链接无效"));
   check(!await invalid.evaluate(() => document.body.classList.contains("is-editor")) && await invalidFrame.evaluate(() => !document.querySelector("[contenteditable]")), "invalid editor link remains read-only and cannot obtain editor privileges");
   await clickSignature(invalid, invalidFrame, "#sig2");
-  check((await invalid.locator("#byPop").innerText()).includes("编辑链接") && invalidCommentRequests === 0, "invalid editor link gets viewer popup without private comment requests");
+  check((await invalid.locator("#commentDetail").innerText()).includes("编辑链接") && invalidCommentRequests === 0, "invalid editor link gets viewer drawer without private comment requests");
   await api(`/api/a/${id}/comments`, undefined, "deliberately-invalid-local-test", 403);
   check(invalidErrors.length === 0, "invalid editor-link flow has no browser errors");
   results.browserErrors.push(...invalidErrors); await invalidContext.close();
